@@ -1,0 +1,6 @@
+Place the following files from the Microsoft.Web.WebView2 NuGet package here:
+
+  build/native/include/WebView2.h
+  build/native/include/WebView2EnvironmentOptions.h   (optional but useful)
+
+After copying, you can delete this file.

@@ -1,0 +1,15 @@
+Place the 64-bit WebView2Loader.dll here:
+
+  From NuGet package → build/native/x64/WebView2Loader.dll
+
+You also need an import library (libWebView2Loader.a) for linking with GCC.
+
+How to generate it (if not already present):
+
+  gendef WebView2Loader.dll
+  dlltool -d WebView2Loader.def -l libWebView2Loader.a
+
+Or install the MSYS2 package:
+  pacman -S mingw-w64-ucrt-x86_64-webview2-loader
+
+After placing the files, you can delete this text file.

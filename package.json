@@ -1,0 +1,36 @@
+{
+  "name": "webview-node",
+  "version": "0.1.3",
+  "description": "Lightweight Windows WebView2 desktop windows for Node.js. Create with new WebView(), open with show().",
+  "main": "src/index.js",
+  "types": "types/index.d.ts",
+  "readme": "README.md",
+  "scripts": {
+    "test": "node examples/basic.js"
+  },
+  "keywords": [
+    "webview",
+    "webview-node",
+    "webview2",
+    "electron",
+    "desktop",
+    "windows",
+    "native",
+    "gui"
+  ],
+  "author": "abdulamk",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "os": [
+    "win32"
+  ],
+  "files": [
+    "bin/",
+    "src/",
+    "types/",
+    "CHANGELOG.md",
+    "README.md"
+  ]
+}

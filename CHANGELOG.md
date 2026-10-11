@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-10-11
+
+## Bug fixes
+- **File picker (`dialog.selectFile`) now works.** The native host previously only implemented `selectFolder`; calling `selectFile` did nothing / never showed a dialog.
+- Added modern `IFileOpenDialog` implementation with classic `GetOpenFileName` fallback.
+- Supports `options.multiple` and `options.title`.
+- Cancel returns `null`; multi-select returns a string array.
+
+## Notes
+You must **rebuild** `webview2-host.exe` from `bin/source` (see Makefile) and replace the binary next to the package / ship it with your app.
+
+
 ## [0.1.3] – 2026-10-07
 
 ### Fixed

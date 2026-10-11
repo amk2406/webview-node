@@ -13,7 +13,7 @@
  *   { "type": "call", "windowId": 1, "method": "setIcon", "args": ["./icon.ico"] }
  *   { "type": "call", "windowId": 1, "method": "flash" }
  *   { "type": "close-response", "windowId": 1, "requestId": "...", "allow": true/false }
- *   { "type": "dialog", "windowId": 1, "requestId": "...", "name": "selectFolder" }
+ *   { "type": "dialog", "windowId": 1, "requestId": "...", "name": "selectFolder|selectFile" }
  *
  * Outgoing (C++ → Node):
  *   { "type": "event", "windowId": 1, "event": "ready" }
@@ -33,6 +33,7 @@
 #include <shobjidl.h>
 #include <shlobj.h>
 #include <shlwapi.h>
+#include <commdlg.h>
 #include <string>
 #include <vector>
 #include <map>
@@ -239,6 +240,112 @@ static std::wstring SelectFolder(HWND owner) {
         wchar_t path[MAX_PATH] = {};
         if (SHGetPathFromIDListW(pidl, path)) result = path;
         CoTaskMemFree(pidl);
+    }
+    return result;
+}
+
+
+// ---------------------------------------------------------------
+// File picker (modern + classic fallback)
+// ---------------------------------------------------------------
+
+static std::wstring SelectFile(HWND owner, bool multiple = false, const std::wstring& title = L"Select File",
+                               const std::wstring& filterName = L"All Files", const std::wstring& filterSpec = L"*.*") {
+    std::wstring result;
+
+    IFileOpenDialog* dialog = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                  IID_IFileOpenDialog, reinterpret_cast<void**>(&dialog));
+    if (SUCCEEDED(hr) && dialog) {
+        DWORD options = 0;
+        dialog->GetOptions(&options);
+        options |= FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST;
+        if (multiple) options |= FOS_ALLOWMULTISELECT;
+        dialog->SetOptions(options);
+
+        if (!title.empty()) dialog->SetTitle(title.c_str());
+
+        // File type filter
+        COMDLG_FILTERSPEC filters[1] = {
+            { filterName.c_str(), filterSpec.c_str() }
+        };
+        dialog->SetFileTypes(1, filters);
+        dialog->SetFileTypeIndex(1);
+
+        hr = dialog->Show(owner);
+        if (SUCCEEDED(hr)) {
+            if (multiple) {
+                IShellItemArray* items = nullptr;
+                if (SUCCEEDED(dialog->GetResults(&items)) && items) {
+                    DWORD count = 0;
+                    items->GetCount(&count);
+                    std::wstring paths;
+                    for (DWORD i = 0; i < count; i++) {
+                        IShellItem* item = nullptr;
+                        if (SUCCEEDED(items->GetItemAt(i, &item)) && item) {
+                            PWSTR path = nullptr;
+                            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+                                if (!paths.empty()) paths += L"|";  // delimiter for multi
+                                paths += path;
+                                CoTaskMemFree(path);
+                            }
+                            item->Release();
+                        }
+                    }
+                    items->Release();
+                    result = paths;
+                }
+            } else {
+                IShellItem* item = nullptr;
+                if (SUCCEEDED(dialog->GetResult(&item)) && item) {
+                    PWSTR path = nullptr;
+                    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+                        result = path;
+                        CoTaskMemFree(path);
+                    }
+                    item->Release();
+                }
+            }
+        }
+        dialog->Release();
+        if (!result.empty()) return result;
+    }
+
+    // Classic fallback (single file only)
+    wchar_t fileBuf[MAX_PATH * 64] = {};
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = fileBuf;
+    ofn.nMaxFile = MAX_PATH * 64;
+    std::wstring filter = filterName + L"\0" + filterSpec + L"\0\0";
+    // OPENFILENAME expects double-null terminated filter with | replaced conceptually
+    // Build proper filter buffer
+    static wchar_t filterBuf[512];
+    memset(filterBuf, 0, sizeof(filterBuf));
+    wcsncpy(filterBuf, filterName.c_str(), 200);
+    size_t nlen = wcslen(filterBuf);
+    filterBuf[nlen] = 0;
+    wcsncpy(filterBuf + nlen + 1, filterSpec.c_str(), 200);
+    ofn.lpstrFilter = filterBuf;
+    ofn.nFilterIndex = 1;
+    ofn.lpstrTitle = title.empty() ? L"Select File" : title.c_str();
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (multiple) ofn.Flags |= OFN_ALLOWMULTISELECT;
+
+    if (GetOpenFileNameW(&ofn)) {
+        if (multiple && fileBuf[ofn.nFileOffset - 1] == 0) {
+            // Multi-select: directory then filenames
+            std::wstring dir = fileBuf;
+            wchar_t* p = fileBuf + ofn.nFileOffset;
+            while (*p) {
+                if (!result.empty()) result += L"|";
+                result += dir + L"\\" + p;
+                p += wcslen(p) + 1;
+            }
+        } else {
+            result = fileBuf;
+        }
     }
     return result;
 }
@@ -916,7 +1023,7 @@ static void HandleMessage(const std::string& json) {
                 }
             }
         }
-        return;
+               return;
     }
 
     if (type == "dialog") {
@@ -929,12 +1036,69 @@ static void HandleMessage(const std::string& json) {
             std::wstring folder = SelectFolder(owner);
             SendDialogResponse(requestId, WideToUtf8(folder));
         }
+        else if (name == "selectFile") {
+            HWND owner = win ? win->hwnd : nullptr;
+            bool multiple = false;
+            std::wstring title = L"Select File";
+            std::wstring filterName = L"All Files";
+            std::wstring filterSpec = L"*.*";
+
+            size_t argsPos = json.find("\"args\"");
+            if (argsPos != std::string::npos) {
+                std::string argsPart = json.substr(argsPos);
+                if (argsPart.find("\"multiple\":true") != std::string::npos ||
+                    argsPart.find("\"multiple\": true") != std::string::npos) {
+                    multiple = true;
+                }
+                size_t tpos = argsPart.find("\"title\"");
+                if (tpos != std::string::npos) {
+                    size_t q1 = argsPart.find('"', tpos + 7);
+                    if (q1 != std::string::npos) {
+                        size_t q2 = q1 + 1;
+                        while (q2 < argsPart.size()) {
+                            if (argsPart[q2] == '\\') { q2 += 2; continue; }
+                            if (argsPart[q2] == '"') break;
+                            q2++;
+                        }
+                        title = Utf8ToWide(argsPart.substr(q1 + 1, q2 - q1 - 1));
+                    }
+                }
+            }
+
+            std::wstring paths = SelectFile(owner, multiple, title, filterName, filterSpec);
+            if (paths.empty()) {
+                SendDialogResponse(requestId, "");
+            } else if (multiple && paths.find(L'|') != std::wstring::npos) {
+                std::ostringstream arr;
+                arr << "[";
+                size_t start = 0;
+                bool first = true;
+                while (start < paths.size()) {
+                    size_t bar = paths.find(L'|', start);
+                    std::wstring one = (bar == std::wstring::npos)
+                        ? paths.substr(start)
+                        : paths.substr(start, bar - start);
+                    if (!first) arr << ",";
+                    arr << "\"" << EscapeJson(WideToUtf8(one)) << "\"";
+                    first = false;
+                    if (bar == std::wstring::npos) break;
+                    start = bar + 1;
+                }
+                arr << "]";
+
+                std::ostringstream ss;
+                ss << "{\"type\":\"dialog-response\",\"requestId\":\""
+                   << EscapeJson(requestId)
+                   << "\",\"result\":" << arr.str() << "}";
+                SendToNode(ss.str());
+            } else {
+                SendDialogResponse(requestId, WideToUtf8(paths));
+            }
+        }
         else if (name == "info" || name == "error" || name == "warning" || name == "confirm") {
-            // Prefer top-level message/title (sent by fixed JS), fall back to args
             std::string message = JsonGetString(json, "message");
             std::string title = JsonGetString(json, "title");
             if (message.empty()) {
-                // try first string in args
                 size_t argsPos = json.find("\"args\"");
                 if (argsPos != std::string::npos) {
                     std::string argsPart = json.substr(argsPos);

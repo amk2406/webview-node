@@ -361,11 +361,31 @@ class WebView extends EventEmitter {
         if (typeof result === 'boolean') return result;
         return result === true || result === 'true' || result === 'yes' || result === 1;
       },
+      /**
+       * Open a native file picker dialog.
+       * @param {object} [options]
+       * @param {boolean} [options.multiple=false] - Allow multi-select
+       * @param {string}  [options.title='Select File']
+       * @returns {Promise<string|string[]|null>} path, array of paths, or null if cancelled
+       */
       async selectFile(options = {}) {
-        return self._dialog('selectFile', options || {});
+        const result = await self._dialog('selectFile', options || {});
+        if (result === '' || result === null || result === undefined) return null;
+        // Multi-select returns a JSON array from the host
+        if (typeof result === 'string' && result.startsWith('[')) {
+          try { return JSON.parse(result); } catch (_) { /* fall through */ }
+        }
+        if (Array.isArray(result)) return result.length ? result : null;
+        return result;
       },
+      /**
+       * Open a native folder picker dialog.
+       * @returns {Promise<string|null>} folder path or null if cancelled
+       */
       async selectFolder(options = {}) {
-        return self._dialog('selectFolder', options || {});
+        const result = await self._dialog('selectFolder', options || {});
+        if (result === '' || result === null || result === undefined) return null;
+        return result;
       },
     };
   }
